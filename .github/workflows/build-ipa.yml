@@ -1,0 +1,160 @@
+name: Build unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+
+# 同一分支只保留最新一次建置，舊的自動取消（省 macOS 執行時間）
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 檢查專案結構
+        run: |
+          for f in pubspec.yaml lib/main.dart ios_native/WakeAlarmBridge.swift; do
+            if [ ! -f "$f" ]; then
+              echo "::error::缺少 $f。請確認檔案在 repo 根目錄，不要多包一層資料夾"
+              exit 1
+            fi
+          done
+
+      - name: 選擇 Xcode 26（AlarmKit 需要 iOS 26 SDK）
+        run: |
+          newest=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | tail -1) || true
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version
+          major=$(xcrun --sdk iphoneos --show-sdk-version | cut -d. -f1)
+          echo "iOS SDK 主版本：$major"
+          if [ "$major" -lt 26 ]; then
+            echo "::error::iOS SDK 是 $major，AlarmKit 需要 iOS 26 SDK。請把 runs-on 改成 macos-26 或其他已安裝 Xcode 26 的映像"
+            exit 1
+          fi
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 產生 iOS 平台資料夾
+        run: |
+          flutter config --no-enable-swift-package-manager || true
+          flutter create --platforms=ios --org com.example --project-name wake_alarm "$RUNNER_TEMP/gen"
+          cp -R "$RUNNER_TEMP/gen/ios" ./ios
+          ls -la ios
+
+      - name: 準備 Podfile（沒有就用內建範本）
+        run: |
+          if [ ! -f ios/Podfile ]; then
+            echo "沒有 Podfile，改用內建範本"
+            cat > ios/Podfile <<'RUBY'
+          platform :ios, '15.5'
+          ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+          project 'Runner', {
+            'Debug' => :debug,
+            'Profile' => :release,
+            'Release' => :release,
+          }
+
+          def flutter_root
+            generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+            unless File.exist?(generated_xcode_build_settings_path)
+              raise "#{generated_xcode_build_settings_path} must exist. Run flutter pub get first."
+            end
+            File.foreach(generated_xcode_build_settings_path) do |line|
+              matches = line.match(/FLUTTER_ROOT\=(.*)/)
+              return matches[1].strip if matches
+            end
+            raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}."
+          end
+
+          require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+          flutter_ios_podfile_setup
+
+          target 'Runner' do
+            use_frameworks! :linkage => :static
+            use_modular_headers!
+
+            flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+            target 'RunnerTests' do
+              inherit! :search_paths
+            end
+          end
+
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              flutter_additional_ios_build_settings(target)
+            end
+          end
+          RUBY
+          fi
+          python3 - <<'PY'
+          import re
+          p = "ios/Podfile"
+          s = open(p, encoding="utf-8").read()
+          s, n = re.subn(r"^#?\s*platform :ios.*$", "platform :ios, '15.5'", s, count=1, flags=re.M)
+          if n == 0:
+              s = "platform :ios, '15.5'\n" + s
+          if "use_frameworks!" not in s:
+              s = s.replace("platform :ios, '15.5'", "platform :ios, '15.5'\nuse_frameworks! :linkage => :static", 1)
+          open(p, "w", encoding="utf-8").write(s)
+          print(s)
+          PY
+          sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 15.5;/g" ios/Runner.xcodeproj/project.pbxproj
+          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 用來偵測你的運動動作，影像只在手機上處理" ios/Runner/Info.plist || true
+
+      - name: 加入系統鬧鐘（AlarmKit）原生程式
+        run: |
+          cp ios_native/WakeAlarmBridge.swift ios/Runner/WakeAlarmBridge.swift
+          ruby -e "require 'xcodeproj'" 2>/dev/null || sudo gem install xcodeproj --no-document
+          ruby - <<'RUBY'
+          require 'xcodeproj'
+          project = Xcodeproj::Project.open('ios/Runner.xcodeproj')
+          target = project.targets.find { |t| t.name == 'Runner' } || abort('找不到 Runner target')
+          group = project.main_group.find_subpath('Runner', true)
+          ref = group.files.find { |f| f.path == 'WakeAlarmBridge.swift' } || group.new_reference('WakeAlarmBridge.swift')
+          target.add_file_references([ref]) unless target.source_build_phase.files_references.include?(ref)
+          project.save
+          RUBY
+          python3 - <<'PY'
+          import re, sys
+          p = "ios/Runner/AppDelegate.swift"
+          s = open(p, encoding="utf-8").read()
+          m = re.search(r"^([ \t]*)GeneratedPluginRegistrant\.register\(with:[ \t]*([^\n]+?)\)[ \t]*$", s, re.M)
+          if not m:
+              sys.exit("找不到 GeneratedPluginRegistrant.register，無法掛上 AlarmKit bridge")
+          if "WakeAlarmBridge.register" not in s:
+              s = s[:m.end()] + f"\n{m.group(1)}WakeAlarmBridge.register(with: {m.group(2)})" + s[m.end():]
+              open(p, "w", encoding="utf-8").write(s)
+          PY
+          /usr/libexec/PlistBuddy -c "Add :NSAlarmKitUsageDescription string 用來在你設定的時間準時響鈴" ios/Runner/Info.plist || true
+
+      - name: 安裝套件
+        run: flutter pub get
+
+      - name: 建置 iOS（不簽名）
+        run: flutter build ios --release --no-codesign
+
+      - name: 打包成 .ipa
+        run: |
+          mkdir Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qr WakeAlarm-unsigned.ipa Payload
+
+      - name: 上傳 .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: WakeAlarm-unsigned
+          path: WakeAlarm-unsigned.ipa
