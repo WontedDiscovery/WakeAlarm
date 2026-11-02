@@ -56,32 +56,45 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refresh();
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_checkRing()); // 回到前景先檢查響鈴，不等補記與排程
+      unawaited(_refresh());
+    }
   }
 
   // 補記過期響鈴 → 重新排程 → 更新畫面 → 檢查是否正在響鈴
+  // 任何一步出錯都只記錄，不會擋住響鈴檢查
   Future<void> _refresh() async {
     final now = DateTime.now();
-    await settleMissed(widget.store, now);
-    await rescheduleAll(widget.store, widget.store.alarms, now);
+    try {
+      await settleMissed(widget.store, now);
+      await rescheduleAll(widget.store, widget.store.alarms, now);
+    } catch (e) {
+      debugPrint('更新鬧鐘時出錯：$e');
+    }
     if (!mounted) return;
     setState(() {
       _alarms = widget.store.alarms;
       _streak = widget.store.streak;
     });
-    _checkRing();
+    unawaited(_checkRing());
   }
 
+  // 有正在響的鬧鐘（在挑戰時限內、還沒完成）就打開響鈴頁
+  // _ringOpen 一定會在結束時還原，避免卡住之後再也不跳
   Future<void> _checkRing() async {
     if (_ringOpen || !mounted) return;
     final ring = findRinging(widget.store, DateTime.now());
     if (ring == null) return;
     _ringOpen = true;
-    await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => RingingPage(store: widget.store, ring: ring),
-    ));
-    _ringOpen = false;
-    _refresh();
+    try {
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => RingingPage(store: widget.store, ring: ring),
+      ));
+    } finally {
+      _ringOpen = false;
+    }
+    if (mounted) unawaited(_refresh());
   }
 
   Future<void> _save() async {

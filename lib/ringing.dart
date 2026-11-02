@@ -82,6 +82,16 @@ class RepCounter {
   }
 }
 
+// 在背景釋放相機（不阻塞畫面）
+Future<void> _disposeCamera(CameraController c) async {
+  try {
+    if (c.value.isStreamingImages) await c.stopImageStream();
+  } catch (_) {}
+  try {
+    await c.dispose();
+  } catch (_) {}
+}
+
 class RingingPage extends StatefulWidget {
   const RingingPage({super.key, required this.store, required this.ring});
   final Store store;
@@ -91,7 +101,7 @@ class RingingPage extends StatefulWidget {
   State<RingingPage> createState() => _RingingPageState();
 }
 
-class _RingingPageState extends State<RingingPage> {
+class _RingingPageState extends State<RingingPage> with WidgetsBindingObserver {
   final _detector = PoseDetector(options: PoseDetectorOptions(mode: PoseDetectionMode.stream));
   final _counter = RepCounter();
   late final DateTime _deadline =
@@ -102,26 +112,43 @@ class _RingingPageState extends State<RingingPage> {
   String _hint = '準備鏡頭中…';
   bool _busy = false;
   bool _done = false;
+  bool _active = true; // App 在前景才能用相機
+  bool _starting = false; // 正在啟動相機，避免重複啟動
   Timer? _timer;
+  Timer? _retry; // 相機沒開成功時，每 2 秒重試一次
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final state = WidgetsBinding.instance.lifecycleState;
+    _active = state == null || state == AppLifecycleState.resumed;
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
-    _startCamera();
+    _retry = Timer.periodic(const Duration(seconds: 2), (_) => _ensureCamera());
+    _ensureCamera();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
-    final c = _cam;
-    _cam = null;
-    if (c != null) {
-      if (c.value.isStreamingImages) c.stopImageStream();
-      c.dispose();
-    }
+    _retry?.cancel();
+    _releaseCamera(showHint: false);
     _detector.close();
     super.dispose();
+  }
+
+  // 切到背景，或被系統畫面（例如鬧鐘）蓋住時，系統會停掉相機：先關掉，回到前景再重新開
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final active = state == AppLifecycleState.resumed;
+    if (active == _active) return;
+    _active = active;
+    if (active) {
+      _ensureCamera();
+    } else {
+      _releaseCamera(showHint: true);
+    }
   }
 
   void _tick() {
@@ -134,36 +161,71 @@ class _RingingPageState extends State<RingingPage> {
     }
   }
 
+  // 需要相機、但還沒開，而且 App 在前景、沒有正在啟動時，才啟動
+  void _ensureCamera() {
+    if (_done || !_active || _starting || _cam != null) return;
+    _startCamera();
+  }
+
+  void _releaseCamera({required bool showHint}) {
+    final c = _cam;
+    _cam = null;
+    if (showHint && mounted) {
+      setState(() => _hint = '請回到 App 畫面，鏡頭會自動開啟');
+    }
+    if (c != null) unawaited(_disposeCamera(c));
+  }
+
   Future<void> _startCamera() async {
+    _starting = true;
+    CameraController? c;
     try {
       final cams = await availableCameras();
+      if (cams.isEmpty) throw StateError('找不到鏡頭');
       final cam = cams.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.front,
+        (x) => x.lensDirection == CameraLensDirection.front,
         orElse: () => cams.first,
       );
-      final c = CameraController(
+      c = CameraController(
         cam,
         ResolutionPreset.medium,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.bgra8888,
       );
       await c.initialize();
-      if (!mounted) {
-        await c.dispose();
+      // 初始化期間 App 可能已切到背景，或這一頁已經結束
+      if (!mounted || _done || !_active) {
+        unawaited(_disposeCamera(c));
         return;
       }
-      _cam = c;
       _rotation = InputImageRotationValue.fromRawValue(cam.sensorOrientation) ??
           InputImageRotation.rotation0deg;
-      setState(() => _hint = '請對準鏡頭，做出「${exerciseName(widget.ring.alarm.exercise)}」');
+      _cam = c;
       await c.startImageStream(_onImage);
+      if (mounted) {
+        setState(() => _hint = '請對準鏡頭，做出「${exerciseName(widget.ring.alarm.exercise)}」');
+      }
     } catch (e) {
-      if (mounted) setState(() => _hint = '無法開啟鏡頭（$e）。時限內未完成將記為失敗');
+      final failed = c;
+      if (failed != null) {
+        if (identical(_cam, failed)) _cam = null;
+        unawaited(_disposeCamera(failed));
+      }
+      if (mounted) setState(() => _hint = _errorText(e));
+    } finally {
+      _starting = false;
     }
   }
 
+  String _errorText(Object e) {
+    if (e is CameraException && e.code.startsWith('CameraAccess')) {
+      return '沒有相機權限，請到「設定」開啟本 App 的相機權限';
+    }
+    return _active ? '鏡頭暫時無法使用，會自動重試' : '請回到 App 畫面，鏡頭會自動開啟';
+  }
+
   Future<void> _onImage(CameraImage img) async {
-    if (_busy || _done) return;
+    if (_busy || _done || _cam == null) return;
     _busy = true;
     try {
       final plane = img.planes.first;
@@ -199,7 +261,13 @@ class _RingingPageState extends State<RingingPage> {
     if (_done) return;
     _done = true;
     _timer?.cancel();
-    await resolve(widget.store, widget.ring.alarm, widget.ring.day, ok);
+    _retry?.cancel();
+    _releaseCamera(showHint: false);
+    try {
+      await resolve(widget.store, widget.ring.alarm, widget.ring.day, ok);
+    } catch (e) {
+      debugPrint('寫入結果時出錯：$e');
+    }
     await silenceAlarm(widget.ring.alarm); // 挑戰結束就關掉系統鬧鐘的響鈴
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -212,6 +280,7 @@ class _RingingPageState extends State<RingingPage> {
   Widget build(BuildContext context) {
     final alarm = widget.ring.alarm;
     final cam = _cam;
+    final ready = cam != null && cam.value.isInitialized;
     final ss = (_left % 60).toString().padLeft(2, '0');
     return PopScope(
       canPop: false,
@@ -235,6 +304,13 @@ class _RingingPageState extends State<RingingPage> {
                   Text('剩餘 ${_left ~/ 60}:$ss'),
                   const SizedBox(height: 8),
                   Text(_hint, textAlign: TextAlign.center),
+                  if (!ready && !_done) ...[
+                    const SizedBox(height: 8),
+                    FilledButton.tonal(
+                      onPressed: _ensureCamera,
+                      child: const Text('重新啟動鏡頭'),
+                    ),
+                  ],
                 ],
               ),
             ),
