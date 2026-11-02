@@ -22,7 +22,7 @@ jobs:
 
       - name: 檢查專案結構
         run: |
-          for f in pubspec.yaml lib/main.dart ios_native/WakeAlarmBridge.swift; do
+          for f in pubspec.yaml lib/main.dart ios_native/WakeAlarmBridge.swift assets/app_icon_1024.png; do
             if [ ! -f "$f" ]; then
               echo "::error::缺少 $f。請確認檔案在 repo 根目錄，不要多包一層資料夾"
               exit 1
@@ -140,6 +140,36 @@ jobs:
               open(p, "w", encoding="utf-8").write(s)
           PY
           /usr/libexec/PlistBuddy -c "Add :NSAlarmKitUsageDescription string 用來在你設定的時間準時響鈴" ios/Runner/Info.plist || true
+
+      - name: 替換 App 圖標（assets/app_icon_1024.png）
+        run: |
+          set_dir=ios/Runner/Assets.xcassets/AppIcon.appiconset
+          test -f assets/app_icon_1024.png || { echo "::error::缺少 assets/app_icon_1024.png"; exit 1; }
+          rm -rf "$set_dir"
+          mkdir -p "$set_dir"
+          cp assets/app_icon_1024.png "$set_dir/AppIcon-1024.png"
+          if sips -g hasAlpha "$set_dir/AppIcon-1024.png" | grep -q "hasAlpha: yes"; then
+            echo "::error::圖標含透明通道，安裝後角落會變黑，請輸出成不含透明的 RGB 圖"
+            exit 1
+          fi
+          cat > "$set_dir/Contents.json" <<'JSON'
+          {
+            "images" : [
+              {
+                "filename" : "AppIcon-1024.png",
+                "idiom" : "universal",
+                "platform" : "ios",
+                "size" : "1024x1024"
+              }
+            ],
+            "info" : {
+              "author" : "xcode",
+              "version" : 1
+            }
+          }
+          JSON
+          python3 -m json.tool "$set_dir/Contents.json" > /dev/null
+          sips -g pixelWidth -g pixelHeight "$set_dir/AppIcon-1024.png"
 
       - name: 安裝套件
         run: flutter pub get
