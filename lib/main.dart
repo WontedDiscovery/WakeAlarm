@@ -12,6 +12,7 @@ Future<void> main() async {
   await initNotifications();
   final prefs = await SharedPreferences.getInstance();
   final store = Store(prefs);
+  await migrateResults(store);
   loadTheme(store); // 讀取上次選的主題與深色模式
   runApp(ValueListenableBuilder<ThemeChoice>(
     valueListenable: appThemeChoice,
@@ -43,7 +44,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _poll = Timer.periodic(const Duration(seconds: 5), (_) => _checkRing());
+    _poll = Timer.periodic(const Duration(seconds: 5), (_) {
+      _checkRing();
+      if (mounted) setState(() {});
+    });
     _refresh();
   }
 
@@ -63,7 +67,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   // 補記過期響鈴 → 重新排程 → 更新畫面 → 檢查是否正在響鈴
-  // 任何一步出錯都只記錄，不會擋住響鈴檢查
   Future<void> _refresh() async {
     final now = DateTime.now();
     try {
@@ -80,11 +83,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     unawaited(_checkRing());
   }
 
-  // 有正在響的鬧鐘（在挑戰時限內、還沒完成）就打開響鈴頁
-  // _ringOpen 一定會在結束時還原，避免卡住之後再也不跳
+  // 目前是否在某個鬧鐘的挑戰時限內（出錯就當作沒有）
+  Ring? _currentRing() {
+    try {
+      return findRinging(widget.store, DateTime.now());
+    } catch (e) {
+      debugPrint('檢查響鈴時出錯：$e');
+      return null;
+    }
+  }
+
+  // 有正在響的鬧鐘就打開響鈴頁；響鈴頁關閉後一定會還原狀態
   Future<void> _checkRing() async {
     if (_ringOpen || !mounted) return;
-    final ring = findRinging(widget.store, DateTime.now());
+    final ring = _currentRing();
     if (ring == null) return;
     _ringOpen = true;
     try {
@@ -95,6 +107,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _ringOpen = false;
     }
     if (mounted) unawaited(_refresh());
+  }
+
+  // 「下一次響鈴」的顯示文字
+  String _whenText(DateTime d) {
+    final now = DateTime.now();
+    final sameDay = d.year == now.year && d.month == now.month && d.day == now.day;
+    final t = hhmm(d.hour, d.minute);
+    return sameDay ? '今天 $t' : '週${dayNames[d.weekday - 1]} $t';
   }
 
   Future<void> _save() async {
@@ -119,7 +139,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
     final decor = decorOf(context);
+    final ringNow = _currentRing(); // 在挑戰時限內，但響鈴頁沒有打開 → 顯示提示
+    final next = nextRingAt(widget.store, DateTime.now());
+    final failed = widget.store.akFailed;
     return Scaffold(
       appBar: AppBar(
         backgroundColor: scheme.primary,
@@ -135,31 +159,71 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         ],
       ),
       body: ThemedBackdrop(
-        child: _alarms.isEmpty
-            ? const Center(child: Text('還沒有鬧鐘，點右下角新增'))
-            : ListView(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                children: [
-                  for (final a in _alarms)
-                    Card(
-                      color: cardColorOf(context),
-                      shape: cardShapeOf(context),
-                      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      child: ListTile(
-                        title: Text(hhmm(a.hour, a.minute), style: const TextStyle(fontSize: 28)),
-                        subtitle: Text('${daysText(a.days)}｜${exerciseName(a.exercise)} ${a.target} 下'),
-                        onTap: () => _edit(a),
-                        trailing: Switch(
-                          value: a.enabled,
-                          onChanged: (v) {
-                            a.enabled = v;
-                            _save();
-                          },
-                        ),
-                      ),
-                    ),
-                ],
+        child: Column(
+          children: [
+            if (ringNow != null && !_ringOpen)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                child: Card(
+                  color: scheme.errorContainer,
+                  child: ListTile(
+                    leading: const Icon(Icons.alarm_on),
+                    title: Text('鬧鐘挑戰進行中（${hhmm(ringNow.alarm.hour, ringNow.alarm.minute)}）'),
+                    subtitle: const Text('時限內完成動作才算成功'),
+                    trailing: FilledButton(onPressed: _checkRing, child: const Text('開始')),
+                  ),
+                ),
               ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  next == null ? '目前沒有啟用的鬧鐘' : '下一次響鈴：${_whenText(next)}',
+                  style: text.bodyMedium,
+                ),
+              ),
+            ),
+            Expanded(
+              child: _alarms.isEmpty
+                  ? const Center(child: Text('還沒有鬧鐘，點右下角新增'))
+                  : ListView(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      children: [
+                        for (final a in _alarms)
+                          Card(
+                            color: cardColorOf(context),
+                            shape: cardShapeOf(context),
+                            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            child: ListTile(
+                              title: Text(hhmm(a.hour, a.minute), style: const TextStyle(fontSize: 28)),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text('${daysText(a.days)}｜${exerciseName(a.exercise)} ${a.target} 下'),
+                                  if (failed.contains(a.id))
+                                    Text(
+                                      '系統鬧鐘未排入，已改用通知提醒',
+                                      style: TextStyle(color: scheme.error),
+                                    ),
+                                ],
+                              ),
+                              onTap: () => _edit(a),
+                              trailing: Switch(
+                                value: a.enabled,
+                                onChanged: (v) {
+                                  a.enabled = v;
+                                  _save();
+                                },
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: decor.accent,
@@ -171,7 +235,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 }
 
-// 主題頁：深色模式開關 ＋ 所有主題（點一下立刻套用）
 class ThemePage extends StatelessWidget {
   const ThemePage({super.key, required this.store});
   final Store store;
@@ -293,13 +356,20 @@ class _EditPageState extends State<EditPage> {
       exercise: _exercise,
       target: _target,
       enabled: old?.enabled ?? true,
-      createdAt: old?.createdAt ?? DateTime.now(),
+      createdAt: _scheduleChanged(old) ? DateTime.now() : old!.createdAt,
     );
     await _write([...all.where((a) => a.id != alarm.id), alarm]);
   }
 
   Future<void> _delete() =>
       _write(widget.store.alarms.where((a) => a.id != widget.editing!.id).toList());
+
+  // 時間或重複日改了，就從現在起重新計算（舊的響鈴時間不會被補記成失敗）
+  bool _scheduleChanged(Alarm? old) {
+    if (old == null) return true;
+    if (old.hour != _hour || old.minute != _minute) return true;
+    return old.days.length != _days.length || !old.days.every(_days.contains);
+  }
 
   Future<void> _write(List<Alarm> list) async {
     await widget.store.saveAlarms(list);

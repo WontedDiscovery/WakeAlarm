@@ -118,9 +118,20 @@ class Store {
   }
 
   Future<void> saveAkSynced(Map<String, String> m) => prefs.setString('akSynced', jsonEncode(m));
+
+  // 系統鬧鐘排程失敗的鬧鐘 id（這些會改用通知提醒，首頁會顯示警告）
+  List<int> get akFailed {
+    final raw = prefs.getString('akFailed');
+    if (raw == null) return [];
+    return [for (final x in jsonDecode(raw) as List) x as int];
+  }
+
+  Future<void> saveAkFailed(List<int> ids) => prefs.setString('akFailed', jsonEncode(ids));
 }
 
-String keyOf(Alarm a, DateTime day) => '${a.id}|${dayKey(day)}';
+// 結果紀錄的 key = 鬧鐘 id + 日期 + 響鈴時間
+// 改了時間之後，同一天的新響鈴會是新的 key，不會被舊紀錄擋住
+String keyOf(Alarm a, DateTime day) => '${a.id}|${dayKey(day)}|${hhmm(a.hour, a.minute)}';
 
 // 同一天只有最早的鬧鐘會影響連續天數（規格 11.2）
 bool isFirstOfDay(Alarm a, DateTime day, List<Alarm> all) {
@@ -178,6 +189,44 @@ Ring? findRinging(Store s, DateTime now) {
   return null;
 }
 
+// 一次性升級：舊的紀錄 key（鬧鐘id|日期）改成新格式（鬧鐘id|日期|時間）
+// 找不到鬧鐘的舊紀錄直接丟掉（那些鬧鐘已經刪除了）
+Future<void> migrateResults(Store s) async {
+  if (s.prefs.getBool('resultsV2') == true) return;
+  final byId = {for (final a in s.alarms) '${a.id}': a};
+  final next = <String, String>{};
+  for (final e in s.results.entries) {
+    final parts = e.key.split('|');
+    if (parts.length == 2) {
+      final a = byId[parts[0]];
+      if (a != null) {
+        next['${parts[0]}|${parts[1]}|${hhmm(a.hour, a.minute)}'] = e.value;
+      }
+    } else {
+      next[e.key] = e.value;
+    }
+  }
+  await s.saveResults(next);
+  await s.prefs.setBool('resultsV2', true);
+}
+
+// 下一次會響的時間（只看啟用中的鬧鐘，往後找 8 天）
+DateTime? nextRingAt(Store s, DateTime now) {
+  DateTime? best;
+  for (final a in s.alarms) {
+    if (!a.enabled) continue;
+    for (var k = 0; k <= 7; k++) {
+      final day = DateTime(now.year, now.month, now.day + k);
+      if (!a.days.contains(day.weekday)) continue;
+      final ring = a.ringAt(day);
+      if (ring.isBefore(now) || ring.isBefore(a.createdAt)) continue;
+      if (best == null || ring.isBefore(best)) best = ring;
+      break;
+    }
+  }
+  return best;
+}
+
 final _plugin = FlutterLocalNotificationsPlugin();
 
 Future<void> initNotifications() async {
@@ -188,8 +237,8 @@ Future<void> initNotifications() async {
 }
 
 // 每次都重新排程（啟動、回到前景、儲存或切換鬧鐘時呼叫）
-// iOS 26+：交給系統鬧鐘 AlarmKit，準時響、不受靜音與專注模式影響，每週重複由系統負責
-// 舊版 iOS，或使用者拒絕鬧鐘權限：退回本地通知（只能播一小段提示音，無法保證準時響鈴）
+// iOS 26+：交給系統鬧鐘 AlarmKit；排不進去的鬧鐘，改用本地通知提醒（點通知一樣會進挑戰）
+// 舊版 iOS，或使用者拒絕鬧鐘權限：全部改用本地通知
 Future<void> rescheduleAll(Store store, List<Alarm> alarms, DateTime now) async {
   var useAlarmKit = false;
   if (alarms.any((a) => a.enabled) && await AlarmKit.isSupported()) {
@@ -197,7 +246,8 @@ Future<void> rescheduleAll(Store store, List<Alarm> alarms, DateTime now) async 
   }
   if (useAlarmKit) {
     await _plugin.cancelAll();
-    await _syncAlarmKit(store, alarms);
+    final failed = await _syncAlarmKit(store, alarms);
+    await _scheduleNotifications(failed, now);
     return;
   }
   // 改用通知前，先取消之前寫進系統鬧鐘的，避免同一個鬧鐘響兩次
@@ -205,15 +255,18 @@ Future<void> rescheduleAll(Store store, List<Alarm> alarms, DateTime now) async 
     await AlarmKit.cancel(int.parse(id));
   }
   await store.saveAkSynced({});
+  await store.saveAkFailed([]);
   await _scheduleNotifications(alarms, now);
 }
 
 // 只重排「內容有變」的鬧鐘；沒變的完全不碰，免得打斷正在響的鬧鐘
-Future<void> _syncAlarmKit(Store store, List<Alarm> alarms) async {
+// 回傳排程失敗的鬧鐘（下次會再試，這次先用通知補上）
+Future<List<Alarm>> _syncAlarmKit(Store store, List<Alarm> alarms) async {
   final prev = store.akSynced;
   final byId = {for (final a in alarms) '${a.id}': a};
   final want = {for (final a in alarms.where((a) => a.enabled)) '${a.id}': _akSignature(a)};
   final done = <String, String>{};
+  final failed = <Alarm>[];
   for (final id in <String>{...prev.keys, ...want.keys}) {
     final sig = want[id];
     if (sig != null && sig == prev[id]) {
@@ -225,9 +278,13 @@ Future<void> _syncAlarmKit(Store store, List<Alarm> alarms) async {
     final a = byId[id]!;
     if (await AlarmKit.schedule(id: a.id, hour: a.hour, minute: a.minute, weekdays: a.days)) {
       done[id] = sig;
+    } else {
+      failed.add(a);
     }
   }
   await store.saveAkSynced(done);
+  await store.saveAkFailed([for (final a in failed) a.id]);
+  return failed;
 }
 
 String _akSignature(Alarm a) => '${a.hour}:${a.minute}|${([...a.days]..sort()).join(',')}';
