@@ -314,7 +314,10 @@ Future<void> _scheduleNotifications(List<Alarm> alarms, DateTime now) async {
       '醒動鬧鐘',
       body,
       tz.TZDateTime.from(ring, tz.local),
-      NotificationDetails(iOS: DarwinNotificationDetails()),
+      NotificationDetails(
+        // 時間敏感：可在部分專注模式下顯示（需要 App 有時間敏感通知權限）
+        iOS: DarwinNotificationDetails(interruptionLevel: InterruptionLevel.timeSensitive),
+      ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
     );
