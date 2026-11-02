@@ -5,35 +5,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core.dart';
 import 'ringing.dart';
-
-// 目前的主題模式；App 內的深色模式開關會改這裡，MaterialApp 立刻跟著切換
-final appThemeMode = ValueNotifier<ThemeMode>(ThemeMode.system);
+import 'themes.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initNotifications();
   final prefs = await SharedPreferences.getInstance();
   final store = Store(prefs);
-  appThemeMode.value = _modeOf(store.darkMode);
-  runApp(ValueListenableBuilder<ThemeMode>(
-    valueListenable: appThemeMode,
-    builder: (context, mode, _) => MaterialApp(
+  loadTheme(store); // 讀取上次選的主題與深色模式
+  runApp(ValueListenableBuilder<ThemeChoice>(
+    valueListenable: appThemeChoice,
+    builder: (context, choice, _) => MaterialApp(
       title: '醒動鬧鐘',
-      theme: ThemeData(colorSchemeSeed: Colors.deepOrange, useMaterial3: true),
-      darkTheme: ThemeData(
-        colorSchemeSeed: Colors.deepOrange,
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
-      themeMode: mode,
+      theme: buildTheme(choice.preset, Brightness.light),
+      darkTheme: buildTheme(choice.preset, Brightness.dark),
+      themeMode: choice.mode,
       home: HomePage(store: store),
     ),
   ));
 }
-
-// 從未設定過 = 跟隨系統
-ThemeMode _modeOf(bool? dark) =>
-    dark == null ? ThemeMode.system : (dark ? ThemeMode.dark : ThemeMode.light);
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key, required this.store});
@@ -100,12 +90,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
-  // 深色模式開關：立刻切換主題，並記住選擇
-  Future<void> _setDark(bool dark) async {
-    appThemeMode.value = dark ? ThemeMode.dark : ThemeMode.light;
-    await widget.store.saveDarkMode(dark);
-  }
-
   Future<void> _edit(Alarm? a) async {
     final changed = await Navigator.of(context).push<bool>(MaterialPageRoute<bool>(
       builder: (_) => EditPage(store: widget.store, editing: a),
@@ -113,40 +97,139 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (changed == true) _refresh();
   }
 
+  Future<void> _openThemes() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ThemePage(store: widget.store),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final decor = decorOf(context);
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: scheme.primary,
+        foregroundColor: scheme.onPrimary,
+        flexibleSpace: appBarHeader(context),
+        title: Text('醒動鬧鐘　連續 $_streak 天'),
+        actions: [
+          IconButton(
+            tooltip: '主題與深色模式',
+            icon: const Icon(Icons.palette),
+            onPressed: _openThemes,
+          ),
+        ],
+      ),
+      body: ThemedBackdrop(
+        child: _alarms.isEmpty
+            ? const Center(child: Text('還沒有鬧鐘，點右下角新增'))
+            : ListView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                children: [
+                  for (final a in _alarms)
+                    Card(
+                      color: cardColorOf(context),
+                      shape: cardShapeOf(context),
+                      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      child: ListTile(
+                        title: Text(hhmm(a.hour, a.minute), style: const TextStyle(fontSize: 28)),
+                        subtitle: Text('${daysText(a.days)}｜${exerciseName(a.exercise)} ${a.target} 下'),
+                        onTap: () => _edit(a),
+                        trailing: Switch(
+                          value: a.enabled,
+                          onChanged: (v) {
+                            a.enabled = v;
+                            _save();
+                          },
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: decor.accent,
+        foregroundColor: decor.onAccent,
+        onPressed: () => _edit(null),
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+// 主題頁：深色模式開關 ＋ 所有主題（點一下立刻套用）
+class ThemePage extends StatelessWidget {
+  const ThemePage({super.key, required this.store});
+  final Store store;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       appBar: AppBar(
-        title: Text('醒動鬧鐘　連續 $_streak 天'),
-        actions: [
-          Icon(isDark ? Icons.dark_mode : Icons.light_mode, size: 20),
-          Switch(value: isDark, onChanged: _setDark),
-          const SizedBox(width: 8),
-        ],
+        backgroundColor: scheme.primary,
+        foregroundColor: scheme.onPrimary,
+        flexibleSpace: appBarHeader(context),
+        title: const Text('主題與深色模式'),
       ),
-      body: _alarms.isEmpty
-          ? const Center(child: Text('還沒有鬧鐘，點右下角新增'))
-          : ListView(
-              children: [
-                for (final a in _alarms)
-                  ListTile(
-                    title: Text(hhmm(a.hour, a.minute), style: const TextStyle(fontSize: 28)),
-                    subtitle: Text('${daysText(a.days)}｜${exerciseName(a.exercise)} ${a.target} 下'),
-                    onTap: () => _edit(a),
-                    trailing: Switch(
-                      value: a.enabled,
-                      onChanged: (v) {
-                        a.enabled = v;
-                        _save();
-                      },
-                    ),
-                  ),
-              ],
-            ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _edit(null),
-        child: const Icon(Icons.add),
+      body: ThemedBackdrop(
+        child: ValueListenableBuilder<ThemeChoice>(
+          valueListenable: appThemeChoice,
+          builder: (context, choice, _) => ListView(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            children: [
+              SwitchListTile(
+                title: const Text('深色模式'),
+                secondary: Icon(isDark ? Icons.dark_mode : Icons.light_mode),
+                value: isDark,
+                onChanged: (v) => setDarkMode(store, v),
+              ),
+              const Divider(),
+              for (final p in kThemePresets)
+                ListTile(
+                  leading: p.art == null
+                      ? _Swatch(p)
+                      : ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.asset(p.art!, width: 56, height: 40, fit: BoxFit.cover),
+                        ),
+                  title: Text(p.name),
+                  trailing: p.id == choice.preset.id ? const Icon(Icons.check_circle) : null,
+                  onTap: () => setThemePreset(store, p),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// 主題預覽：主色、次要色、第三色三個圓點
+class _Swatch extends StatelessWidget {
+  const _Swatch(this.preset);
+  final AppThemePreset preset;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = schemeFor(preset, Brightness.light);
+    Widget dot(Color c) => Container(
+          width: 16,
+          height: 16,
+          decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+        );
+    return SizedBox(
+      width: 56,
+      child: Row(
+        children: [
+          dot(s.primary),
+          const SizedBox(width: 4),
+          dot(s.secondary),
+          const SizedBox(width: 4),
+          dot(s.tertiary),
+        ],
       ),
     );
   }
@@ -224,13 +307,17 @@ class _EditPageState extends State<EditPage> {
     final editing = widget.editing != null;
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Theme.of(context).colorScheme.onPrimary,
+        flexibleSpace: appBarHeader(context),
         title: Text(editing ? '編輯鬧鐘' : '新增鬧鐘'),
         actions: [
           if (editing) IconButton(icon: const Icon(Icons.delete_outline), onPressed: _delete),
           IconButton(icon: const Icon(Icons.check), onPressed: _save),
         ],
       ),
-      body: ListView(
+      body: ThemedBackdrop(
+        child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           ListTile(
@@ -287,6 +374,7 @@ class _EditPageState extends State<EditPage> {
             ),
           ),
         ],
+      ),
       ),
     );
   }
