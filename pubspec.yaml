@@ -1,7 +1,7 @@
 name: wake_alarm
 description: 醒動鬧鐘 v0.1（運動起床鬧鐘）
 publish_to: none
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -18,3 +18,5 @@ dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/talisman_bg.jpg
