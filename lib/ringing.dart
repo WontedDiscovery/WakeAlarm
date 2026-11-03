@@ -7,6 +7,7 @@ import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import 'core.dart';
+import 'share_card.dart';
 
 PoseLandmark? _lm(Pose p, PoseLandmarkType t) {
   final l = p.landmarks[t];
@@ -270,10 +271,31 @@ class _RingingPageState extends State<RingingPage> with WidgetsBindingObserver {
     }
     await silenceAlarm(widget.ring.alarm); // 挑戰結束就關掉系統鬧鐘的響鈴
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ok ? '完成！本次記為成功' : '時限已到，本次記為失敗')),
-    );
-    Navigator.of(context).pop();
+    if (ok) {
+      // 完成挑戰：問要不要分享今天的成果卡片
+      final share = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('完成挑戰！'),
+          content: const Text('要分享今天的成果卡片嗎？'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('略過')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('分享卡片')),
+          ],
+        ),
+      );
+      if (share == true && mounted) {
+        await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => ShareCardPage(
+            store: widget.store,
+            detail: '${exerciseName(widget.ring.alarm.exercise)} ${widget.ring.alarm.target} 下',
+          ),
+        ));
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('時限已到，本次記為失敗')));
+    }
+    if (mounted) Navigator.of(context).pop();
   }
 
   @override

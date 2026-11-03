@@ -3,13 +3,17 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'alarm_kit.dart';
 import 'core.dart';
+import 'sounds.dart';
 import 'ringing.dart';
+import 'share_card.dart';
 import 'themes.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initNotifications();
+  await ensureAlarmSounds(); // 鈴聲複製到 Library/Sounds，通知才找得到
   final prefs = await SharedPreferences.getInstance();
   final store = Store(prefs);
   await migrateResults(store);
@@ -130,6 +134,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (changed == true) _refresh();
   }
 
+  Future<void> _openShare() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ShareCardPage(store: widget.store),
+    ));
+  }
+
   Future<void> _openThemes() async {
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => ThemePage(store: widget.store),
@@ -151,6 +161,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         flexibleSpace: appBarHeader(context),
         title: Text('醒動鬧鐘　連續 $_streak 天'),
         actions: [
+          IconButton(
+            tooltip: '分享卡片',
+            icon: const Icon(Icons.ios_share),
+            onPressed: _openShare,
+          ),
           IconButton(
             tooltip: '主題與深色模式',
             icon: const Icon(Icons.palette),
@@ -327,6 +342,16 @@ class _EditPageState extends State<EditPage> {
       widget.editing == null ? {1, 2, 3, 4, 5, 6, 7} : {...widget.editing!.days};
   late Exercise _exercise = widget.editing?.exercise ?? Exercise.jumpingJack;
   late int _target = widget.editing?.target ?? 20;
+  late String _sound = soundById(widget.editing?.sound ?? kDefaultSound).id;
+  bool _sysAlarm = false; // iOS 26 以上走系統鬧鐘，鈴聲固定為系統預設
+
+  @override
+  void initState() {
+    super.initState();
+    AlarmKit.isSupported().then((v) {
+      if (mounted) setState(() => _sysAlarm = v);
+    });
+  }
 
   Future<void> _pickTime() async {
     final t = await showTimePicker(
@@ -357,6 +382,7 @@ class _EditPageState extends State<EditPage> {
       target: _target,
       enabled: old?.enabled ?? true,
       createdAt: _scheduleChanged(old) ? DateTime.now() : old!.createdAt,
+      sound: _sound,
     );
     await _write([...all.where((a) => a.id != alarm.id), alarm]);
   }
@@ -437,6 +463,18 @@ class _EditPageState extends State<EditPage> {
                   DropdownMenuItem(value: e, child: Text(exerciseName(e))),
               ],
               onChanged: (v) => setState(() => _exercise = v ?? _exercise),
+            ),
+          ),
+          ListTile(
+            title: const Text('鈴聲'),
+            subtitle: _sysAlarm ? const Text('iOS 26 以上用系統鬧鐘，鈴聲固定為系統預設') : null,
+            trailing: DropdownButton<String>(
+              value: _sound,
+              items: [
+                for (final s in kAlarmSounds)
+                  DropdownMenuItem(value: s.id, child: Text(s.name)),
+              ],
+              onChanged: _sysAlarm ? null : (v) => setState(() => _sound = v ?? _sound),
             ),
           ),
           ListTile(
