@@ -3,9 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'alarm_kit.dart';
 import 'core.dart';
-import 'sounds.dart';
 import 'ringing.dart';
 import 'share_card.dart';
 import 'themes.dart';
@@ -13,11 +11,10 @@ import 'themes.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initNotifications();
-  await ensureAlarmSounds(); // 鈴聲複製到 Library/Sounds，通知才找得到
   final prefs = await SharedPreferences.getInstance();
   final store = Store(prefs);
   await migrateResults(store);
-  loadTheme(store); // 讀取上次選的主題與深色模式
+  await loadTheme(store); // 讀取上次選的主題與深色模式
   runApp(ValueListenableBuilder<ThemeChoice>(
     valueListenable: appThemeChoice,
     builder: (context, choice, _) => MaterialApp(
@@ -278,6 +275,44 @@ class ThemePage extends StatelessWidget {
                 onChanged: (v) => setDarkMode(store, v),
               ),
               const Divider(),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('從相簿選擇圖片'),
+                subtitle: const Text('用圖片當背景，介面顏色會自動配合'),
+                onTap: () async {
+                  try {
+                    await pickCustomBackground(store);
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context)
+                          .showSnackBar(SnackBar(content: Text('無法使用這張圖片：$e')));
+                    }
+                  }
+                },
+              ),
+              ValueListenableBuilder<AppThemePreset?>(
+                valueListenable: customPreset,
+                builder: (context, custom, _) => custom == null
+                    ? const SizedBox.shrink()
+                    : Column(
+                        children: [
+                          ListTile(
+                            leading: CustomThumb(custom.artFile!),
+                            title: const Text('自訂圖片'),
+                            trailing: choice.preset.id == custom.id
+                                ? const Icon(Icons.check_circle)
+                                : null,
+                            onTap: () => useCustomBackground(store),
+                          ),
+                          ListTile(
+                            leading: const Icon(Icons.delete_outline),
+                            title: const Text('移除自訂背景'),
+                            onTap: () => clearCustomBackground(store),
+                          ),
+                        ],
+                      ),
+              ),
+              const Divider(),
               for (final p in kThemePresets)
                 ListTile(
                   leading: p.art == null
@@ -342,17 +377,6 @@ class _EditPageState extends State<EditPage> {
       widget.editing == null ? {1, 2, 3, 4, 5, 6, 7} : {...widget.editing!.days};
   late Exercise _exercise = widget.editing?.exercise ?? Exercise.jumpingJack;
   late int _target = widget.editing?.target ?? 20;
-  late String _sound = soundById(widget.editing?.sound ?? kDefaultSound).id;
-  bool _sysAlarm = false; // iOS 26 以上走系統鬧鐘，鈴聲固定為系統預設
-
-  @override
-  void initState() {
-    super.initState();
-    AlarmKit.isSupported().then((v) {
-      if (mounted) setState(() => _sysAlarm = v);
-    });
-  }
-
   Future<void> _pickTime() async {
     final t = await showTimePicker(
       context: context,
@@ -382,7 +406,6 @@ class _EditPageState extends State<EditPage> {
       target: _target,
       enabled: old?.enabled ?? true,
       createdAt: _scheduleChanged(old) ? DateTime.now() : old!.createdAt,
-      sound: _sound,
     );
     await _write([...all.where((a) => a.id != alarm.id), alarm]);
   }
@@ -463,18 +486,6 @@ class _EditPageState extends State<EditPage> {
                   DropdownMenuItem(value: e, child: Text(exerciseName(e))),
               ],
               onChanged: (v) => setState(() => _exercise = v ?? _exercise),
-            ),
-          ),
-          ListTile(
-            title: const Text('鈴聲'),
-            subtitle: _sysAlarm ? const Text('iOS 26 以上用系統鬧鐘，鈴聲固定為系統預設') : null,
-            trailing: DropdownButton<String>(
-              value: _sound,
-              items: [
-                for (final s in kAlarmSounds)
-                  DropdownMenuItem(value: s.id, child: Text(s.name)),
-              ],
-              onChanged: _sysAlarm ? null : (v) => setState(() => _sound = v ?? _sound),
             ),
           ),
           ListTile(
