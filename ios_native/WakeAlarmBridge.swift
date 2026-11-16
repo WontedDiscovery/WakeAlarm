@@ -32,6 +32,22 @@ struct OpenWakeAlarmIntent: LiveActivityIntent {
 #endif
 
 final class WakeAlarmBridge {
+    /// 換成指定的替代圖示（name 為 nil 時回到預設圖示）
+    private static func setIcon(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard UIApplication.shared.supportsAlternateIcons else {
+            result(false)
+            return
+        }
+        let args = (call.arguments as? [String: Any]) ?? [:]
+        let name = args["name"] as? String
+        UIApplication.shared.setAlternateIconName(name) { error in
+            if let error = error {
+                NSLog("WakeAlarm setAlternateIconName failed: \(error)")
+            }
+            DispatchQueue.main.async { result(error == nil) }
+        }
+    }
+
     /// 在 AppDelegate 的 GeneratedPluginRegistrant.register 之後呼叫一次
     static func register(with registry: FlutterPluginRegistry) {
         guard let registrar = registry.registrar(forPlugin: "WakeAlarmBridge") else { return }
@@ -45,6 +61,17 @@ final class WakeAlarmBridge {
     }
 
     static func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        // 換 App 圖示：iOS 10.3 以上都支援，所以放在 AlarmKit 判斷之前處理
+        switch call.method {
+        case "getIcon":
+            result(UIApplication.shared.alternateIconName)
+            return
+        case "setIcon":
+            setIcon(call, result: result)
+            return
+        default:
+            break
+        }
         #if canImport(AlarmKit)
         if #available(iOS 26.0, *) {
             AlarmKitHandler.handle(call, result: result)
