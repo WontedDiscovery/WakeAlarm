@@ -22,7 +22,7 @@ jobs:
 
       - name: 檢查專案結構
         run: |
-          for f in pubspec.yaml lib/main.dart ios_native/WakeAlarmBridge.swift assets/app_icon_1024.png; do
+          for f in pubspec.yaml lib/main.dart lib/app_icon.dart ios_native/WakeAlarmBridge.swift assets/icons/orange.png assets/icons/dark.png; do
             if [ ! -f "$f" ]; then
               echo "::error::缺少 $f。請確認檔案在 repo 根目錄，不要多包一層資料夾"
               exit 1
@@ -142,35 +142,70 @@ jobs:
           PY
           /usr/libexec/PlistBuddy -c "Add :NSAlarmKitUsageDescription string 用來在你設定的時間準時響鈴" ios/Runner/Info.plist || true
 
-      - name: 替換 App 圖標（assets/app_icon_1024.png）
+      - name: 替換 App 圖標與替代圖示（assets/icons/）
         run: |
-          set_dir=ios/Runner/Assets.xcassets/AppIcon.appiconset
-          test -f assets/app_icon_1024.png || { echo "::error::缺少 assets/app_icon_1024.png"; exit 1; }
-          rm -rf "$set_dir"
-          mkdir -p "$set_dir"
-          cp assets/app_icon_1024.png "$set_dir/AppIcon-1024.png"
-          if sips -g hasAlpha "$set_dir/AppIcon-1024.png" | grep -q "hasAlpha: yes"; then
-            echo "::error::圖標含透明通道，安裝後角落會變黑，請輸出成不含透明的 RGB 圖"
-            exit 1
-          fi
-          cat > "$set_dir/Contents.json" <<'JSON'
-          {
-            "images" : [
-              {
-                "filename" : "AppIcon-1024.png",
-                "idiom" : "universal",
-                "platform" : "ios",
-                "size" : "1024x1024"
-              }
-            ],
-            "info" : {
-              "author" : "xcode",
-              "version" : 1
-            }
+          python3 - <<'PY'
+          import json, os, shutil, subprocess, sys
+
+          root = "ios/Runner/Assets.xcassets"
+          colors = ["orange", "blue", "green", "purple", "pink", "dark"]
+          for c in colors:
+              f = f"assets/icons/{c}.png"
+              if not os.path.isfile(f):
+                  print(f"::error::缺少 {f}。請把 assets/icons/ 裡的 6 個 PNG 都上傳到 repo")
+                  sys.exit(1)
+
+          # 主圖示（預設橘色）與各替代圖示；每組都附上深色模式用的黑白圖
+          sets = {
+              "AppIcon": "orange",
+              "AppIconBlue": "blue",
+              "AppIconGreen": "green",
+              "AppIconPurple": "purple",
+              "AppIconPink": "pink",
           }
-          JSON
-          python3 -m json.tool "$set_dir/Contents.json" > /dev/null
-          sips -g pixelWidth -g pixelHeight "$set_dir/AppIcon-1024.png"
+          for set_name, color in sets.items():
+              d = os.path.join(root, set_name + ".appiconset")
+              shutil.rmtree(d, ignore_errors=True)
+              os.makedirs(d)
+              shutil.copy(f"assets/icons/{color}.png", os.path.join(d, "AppIcon-1024.png"))
+              shutil.copy("assets/icons/dark.png", os.path.join(d, "AppIcon-dark-1024.png"))
+              contents = {
+                  "images": [
+                      {"filename": "AppIcon-1024.png", "idiom": "universal",
+                       "platform": "ios", "size": "1024x1024"},
+                      {"appearances": [{"appearance": "luminosity", "value": "dark"}],
+                       "filename": "AppIcon-dark-1024.png", "idiom": "universal",
+                       "platform": "ios", "size": "1024x1024"},
+                  ],
+                  "info": {"author": "xcode", "version": 1},
+              }
+              with open(os.path.join(d, "Contents.json"), "w", encoding="utf-8") as fh:
+                  json.dump(contents, fh, ensure_ascii=False, indent=2)
+              print("已建立", set_name)
+
+          # 透明通道會讓角落變黑，所以先檢查
+          for c in colors:
+              f = f"assets/icons/{c}.png"
+              out = subprocess.run(["sips", "-g", "hasAlpha", f], capture_output=True, text=True).stdout
+              if "hasAlpha: yes" in out:
+                  print(f"::error::{f} 含透明通道，安裝後角落會變黑，請輸出成不含透明的 RGB 圖")
+                  sys.exit(1)
+          PY
+
+          # 告訴 Xcode 有哪些替代圖示（Xcode 會自動產生對應的 Info.plist 設定）
+          ruby -e "require 'xcodeproj'" 2>/dev/null || sudo gem install xcodeproj --no-document
+          ruby <<'RUBY'
+          require 'xcodeproj'
+          project = Xcodeproj::Project.open('ios/Runner.xcodeproj')
+          target = project.targets.find { |t| t.name == 'Runner' }
+          raise '找不到 Runner target' unless target
+          target.build_configurations.each do |config|
+            config.build_settings['ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES'] =
+              'AppIconBlue AppIconGreen AppIconPurple AppIconPink'
+          end
+          project.save
+          puts '已設定替代圖示'
+          RUBY
 
       - name: 安裝套件
         run: flutter pub get
