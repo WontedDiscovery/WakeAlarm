@@ -114,6 +114,7 @@ jobs:
           PY
           sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 15.5;/g" ios/Runner.xcodeproj/project.pbxproj
           /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 用來偵測你的運動動作，影像只在手機上處理" ios/Runner/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 用來讓你從相簿選擇背景圖片，圖片只存在手機上" ios/Runner/Info.plist || true
 
       - name: 加入系統鬧鐘（AlarmKit）原生程式
         run: |
