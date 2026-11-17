@@ -203,9 +203,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
             Expanded(
               child: _alarms.isEmpty
-                  ? const Center(child: Text('還沒有鬧鐘，點右下角新增'))
+                  ? Padding(padding: EdgeInsets.only(bottom: pageBottomInset(context)), child: const Center(child: Text('還沒有鬧鐘，點右下角新增')))
                   : ListView(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      padding: EdgeInsets.fromLTRB(0, 8, 0, 8 + pageBottomInset(context)),
                       children: [
                         for (final a in _alarms)
                           AdaptiveCard(
@@ -242,11 +242,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: Padding(
+        padding: EdgeInsets.only(bottom: pageBottomInset(context)),
+        child: FloatingActionButton(
         backgroundColor: decor.accent,
         foregroundColor: decor.onAccent,
         onPressed: () => _edit(null),
         child: const Icon(Icons.add),
+        ),
       ),
     );
   }
