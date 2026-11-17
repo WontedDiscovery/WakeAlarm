@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
 
@@ -16,6 +17,12 @@ String fmtStopwatch(Duration d) {
   final core = h > 0 ? '$h:${two(m)}:${two(s)}' : '${two(m)}:${two(s)}';
   return '$core.${two(cs)}';
 }
+
+/// 按鈕文字：字太大時會自動縮小，不會換行或被切掉
+Widget _label(String text) => FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Text(text, maxLines: 1, style: const TextStyle(fontSize: 18)),
+    );
 
 class StopwatchPage extends StatefulWidget {
   const StopwatchPage({super.key});
@@ -75,38 +82,58 @@ class _StopwatchPageState extends State<StopwatchPage> {
           child: Column(
             children: [
               const SizedBox(height: 32),
-              Text(
-                fmtStopwatch(elapsed),
-                style: const TextStyle(fontSize: 54, fontWeight: FontWeight.w300),
+              // 時間太寬時自動縮小，字放大或變粗也不會換行
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    fmtStopwatch(elapsed),
+                    maxLines: 1,
+                    softWrap: false,
+                    style: TextStyle(
+                      fontSize: 54,
+                      fontWeight: FontWeight.w300,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
               ),
               const SizedBox(height: 28),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SizedBox(
-                    width: 130,
-                    height: 60,
-                    child: OutlinedButton(
-                      onPressed: running ? _lap : (canReset ? _reset : null),
-                      child: Text(running ? '圈數' : '重設', style: const TextStyle(fontSize: 18)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: SizedBox(
+                        height: 60,
+                        child: OutlinedButton(
+                          onPressed: running ? _lap : (canReset ? _reset : null),
+                          child: _label(running ? '圈數' : '重設'),
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 24),
-                  SizedBox(
-                    width: 130,
-                    height: 60,
-                    child: FilledButton(
-                      onPressed: _toggle,
-                      child: Text(running ? '停止' : '開始', style: const TextStyle(fontSize: 18)),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: SizedBox(
+                        height: 60,
+                        child: FilledButton(
+                          onPressed: _toggle,
+                          child: _label(running ? '停止' : '開始'),
+                        ),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               const SizedBox(height: 16),
               const Divider(height: 1),
               Expanded(
                 child: _laps.isEmpty
-                    ? Padding(padding: EdgeInsets.only(bottom: pageBottomInset(context)), child: const Center(child: Text('還沒有圈數紀錄')))
+                    ? Padding(
+                        padding: EdgeInsets.only(bottom: pageBottomInset(context)),
+                        child: const Center(child: Text('還沒有圈數紀錄')),
+                      )
                     : ListView.builder(
                         itemCount: _laps.length,
                         padding: EdgeInsets.only(bottom: pageBottomInset(context)),
