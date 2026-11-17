@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_icon.dart';
+import 'liquid_glass.dart';
 import 'core.dart';
 import 'ringing.dart';
 import 'root_tabs.dart';
@@ -155,8 +156,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final failed = widget.store.akFailed;
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: scheme.primary,
-        foregroundColor: scheme.onPrimary,
+        backgroundColor: kLiquidGlass ? Colors.transparent : scheme.primary,
+        foregroundColor: kLiquidGlass ? scheme.onSurface : scheme.onPrimary,
+        surfaceTintColor: kLiquidGlass ? Colors.transparent : null,
+        elevation: kLiquidGlass ? 0.0 : null,
         flexibleSpace: appBarHeader(context),
         title: Text('醒動鬧鐘　連續 $_streak 天'),
         actions: [
@@ -178,7 +181,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             if (ringNow != null && !_ringOpen)
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                child: Card(
+                child: AdaptiveCard(
                   color: scheme.errorContainer,
                   child: ListTile(
                     leading: const Icon(Icons.alarm_on),
@@ -205,7 +208,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       children: [
                         for (final a in _alarms)
-                          Card(
+                          AdaptiveCard(
                             color: cardColorOf(context),
                             shape: cardShapeOf(context),
                             margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
