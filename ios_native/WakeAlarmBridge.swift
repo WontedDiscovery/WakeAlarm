@@ -51,6 +51,11 @@ final class WakeAlarmBridge {
     /// 在 AppDelegate 的 GeneratedPluginRegistrant.register 之後呼叫一次
     static func register(with registry: FlutterPluginRegistry) {
         guard let registrar = registry.registrar(forPlugin: "WakeAlarmBridge") else { return }
+        // 系統導覽列平台視圖（UITabBar，iOS 26 會自動套用液態玻璃）
+        registrar.register(
+            GlassTabBarFactory(messenger: registrar.messenger()),
+            withId: "wake_alarm/glass_tabbar"
+        )
         let channel = FlutterMethodChannel(
             name: "wake_alarm/alarmkit",
             binaryMessenger: registrar.messenger()
@@ -210,3 +215,103 @@ private enum AlarmKitHandler {
     }
 }
 #endif
+
+
+// MARK: - 系統導覽列（UITabBar 平台視圖）
+// iOS 26 的 UITabBar 會自動套用液態玻璃（真正的折射與模糊）。
+// Flutter 端用 UiKitView（viewType: wake_alarm/glass_tabbar）把它嵌進底部版面。
+
+/// 平台視圖工廠：Flutter 每放一個 UiKitView，就建立一個 UITabBar
+final class GlassTabBarFactory: NSObject, FlutterPlatformViewFactory {
+    private let messenger: FlutterBinaryMessenger
+
+    init(messenger: FlutterBinaryMessenger) {
+        self.messenger = messenger
+        super.init()
+    }
+
+    func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
+        return FlutterStandardMessageCodec.sharedInstance()
+    }
+
+    func create(
+        withFrame frame: CGRect,
+        viewIdentifier viewId: Int64,
+        arguments args: Any?
+    ) -> FlutterPlatformView {
+        return GlassTabBarView(frame: frame, messenger: messenger, args: args as? [String: Any])
+    }
+}
+
+/// 系統的 UITabBar，三個分頁：鬧鐘、計時器、碼表
+final class GlassTabBarView: NSObject, FlutterPlatformView, UITabBarDelegate {
+    private let bar: UITabBar
+    private let channel: FlutterMethodChannel
+
+    init(frame: CGRect, messenger: FlutterBinaryMessenger, args: [String: Any]?) {
+        bar = UITabBar(frame: frame)
+        channel = FlutterMethodChannel(name: "wake_alarm/tabbar", binaryMessenger: messenger)
+        super.init()
+
+        bar.items = [
+            UITabBarItem(title: "鬧鐘", image: UIImage(systemName: "alarm"), tag: 0),
+            UITabBarItem(title: "計時器", image: UIImage(systemName: "timer"), tag: 1),
+            UITabBarItem(title: "碼表", image: UIImage(systemName: "stopwatch"), tag: 2),
+        ]
+        bar.delegate = self
+        applyTint((args?["tint"] as? Int))
+        applyStyle(args?["dark"] as? Bool)
+        selectTab((args?["index"] as? Int) ?? 0)
+
+        // Flutter 端的指令：切換分頁、改變強調色
+        channel.setMethodCallHandler { [weak self] call, result in
+            guard let self = self else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            switch call.method {
+            case "select":
+                self.selectTab((call.arguments as? Int) ?? 0)
+                result(nil)
+            case "tint":
+                self.applyTint(call.arguments as? Int)
+                result(nil)
+            case "style":
+                self.applyStyle(call.arguments as? Bool)
+                result(nil)
+            default:
+                result(FlutterMethodNotImplemented)
+            }
+        }
+    }
+
+    func view() -> UIView {
+        return bar
+    }
+
+    // 使用者點了分頁（程式切換不會觸發這裡）：通知 Flutter 切換內容
+    func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
+        channel.invokeMethod("tapped", arguments: item.tag)
+    }
+
+    private func selectTab(_ index: Int) {
+        guard let items = bar.items, items.indices.contains(index) else { return }
+        bar.selectedItem = items[index]
+    }
+
+    // 讓原生導覽列跟著 App 的深淺色（nil = 跟隨系統）
+    private func applyStyle(_ dark: Bool?) {
+        guard let dark = dark else { return }
+        bar.overrideUserInterfaceStyle = dark ? .dark : .light
+    }
+
+    private func applyTint(_ argb: Int?) {
+        guard let argb = argb else { return }
+        bar.tintColor = UIColor(
+            red: CGFloat((argb >> 16) & 0xFF) / 255,
+            green: CGFloat((argb >> 8) & 0xFF) / 255,
+            blue: CGFloat(argb & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+}
