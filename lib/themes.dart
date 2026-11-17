@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'core.dart';
+import 'liquid_glass.dart';
 
 // ── 主題定義 ────────────────────────────────────────────────
 // seed = 主色；accent = 次要色；accent2 = 第三色（金色強調）
@@ -80,6 +81,28 @@ ThemeData buildTheme(AppThemePreset p, Brightness b) {
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
+    // iOS 26 以上：標題列透明、按鈕改成膠囊形、浮動按鈕圓角放大
+    appBarTheme: kLiquidGlass
+        ? AppBarTheme(
+            backgroundColor: Colors.transparent,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0.0,
+            scrolledUnderElevation: 0.0,
+          )
+        : null,
+    floatingActionButtonTheme: kLiquidGlass
+        ? FloatingActionButtonThemeData(
+            elevation: 0.0,
+            highlightElevation: 0.0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+          )
+        : null,
+    filledButtonTheme: kLiquidGlass
+        ? FilledButtonThemeData(style: FilledButton.styleFrom(shape: const StadiumBorder()))
+        : null,
+    outlinedButtonTheme: kLiquidGlass
+        ? OutlinedButtonThemeData(style: OutlinedButton.styleFrom(shape: const StadiumBorder()))
+        : null,
     extensions: [
       AppDecor(
         art: p.art,
@@ -154,7 +177,9 @@ AppDecor decorOf(BuildContext context) =>
 Widget? appBarHeader(BuildContext context) {
   final header = decorOf(context).header;
   if (header == null) return null;
-  return DecoratedBox(decoration: BoxDecoration(gradient: header));
+  final gradient = DecoratedBox(decoration: BoxDecoration(gradient: header));
+  // iOS 26 以上：標題列背景半透明，讓下面的內容透出來
+  return kLiquidGlass ? Opacity(opacity: 0.86, child: gradient) : gradient;
 }
 
 // 卡片：圖片主題用半透明，讓背景圖透出來
