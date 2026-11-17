@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -229,17 +230,33 @@ DateTime? nextRingAt(Store s, DateTime now) {
 
 final _plugin = FlutterLocalNotificationsPlugin();
 
+const _alarmChannelId = 'wake_alarm';
+
 Future<void> initNotifications() async {
   tz.initializeTimeZones();
   final dynamic zone = await FlutterTimezone.getLocalTimezone();
   tz.setLocalLocation(tz.getLocation(zone is String ? zone : zone.identifier as String));
-  await _plugin.initialize(InitializationSettings(iOS: DarwinInitializationSettings()));
+  await _plugin.initialize(InitializationSettings(
+    android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    iOS: DarwinInitializationSettings(),
+  ));
+  // Android：建立鬧鐘通知頻道，並請求通知權限（Android 13 以上需要）；iOS 上這些會拿到 null，不做事
+  try {
+    final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    await android?.createNotificationChannel(AndroidNotificationChannel(
+      _alarmChannelId,
+      '起床鬧鐘',
+      description: '到時間提醒你起床運動',
+      importance: Importance.max,
+    ));
+    unawaited(android?.requestNotificationsPermission()); // 不等使用者按允許，免得卡住啟動
+  } catch (_) {}
 }
 
 // 每次都重新排程（啟動、回到前景、儲存或切換鬧鐘時呼叫）
 // iOS 26+：交給系統鬧鐘 AlarmKit；排不進去的鬧鐘，改用本地通知提醒（點通知一樣會進挑戰）
 // 舊版 iOS，或使用者拒絕鬧鐘權限：全部改用本地通知
-Future<void> rescheduleAll(Store store, List<Alarm> alarms, DateTime now) async {
+Future<void> _rescheduleAlarms(Store store, List<Alarm> alarms, DateTime now) async {
   var useAlarmKit = false;
   if (alarms.any((a) => a.enabled) && await AlarmKit.isSupported()) {
     useAlarmKit = await AlarmKit.requestAuthorization();
@@ -297,6 +314,20 @@ Future<void> silenceAlarm(Alarm a) async {
 // 通知備援：只排未來 7 天，最多 60 則
 Future<void> _scheduleNotifications(List<Alarm> alarms, DateTime now) async {
   await _plugin.cancelAll();
+  // Android：沒有精準鬧鐘權限時（Android 12 以下或被關掉），改用不精準排程，免得整批排程失敗
+  final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+  var exact = true;
+  try {
+    exact = (await android?.canScheduleExactNotifications()) ?? true;
+  } catch (_) {}
+  final androidDetails = AndroidNotificationDetails(
+    _alarmChannelId,
+    '起床鬧鐘',
+    channelDescription: '到時間提醒你起床運動',
+    importance: Importance.max,
+    priority: Priority.max,
+    category: AndroidNotificationCategory.alarm,
+  );
   final jobs = <(DateTime, int, String)>[];
   for (final a in alarms.where((a) => a.enabled)) {
     for (var k = 0; k < scheduleDays; k++) {
@@ -315,11 +346,57 @@ Future<void> _scheduleNotifications(List<Alarm> alarms, DateTime now) async {
       body,
       tz.TZDateTime.from(ring, tz.local),
       NotificationDetails(
+        android: androidDetails,
         // 時間敏感：可在部分專注模式下顯示（需要 App 有時間敏感通知權限）
         iOS: DarwinNotificationDetails(interruptionLevel: InterruptionLevel.timeSensitive),
       ),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      androidScheduleMode: exact ? AndroidScheduleMode.exactAllowWhileIdle : AndroidScheduleMode.inexactAllowWhileIdle,
       uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
     );
   }
+}
+
+// ── 計時器 ──────────────────────────────────────────
+// 狀態存在 SharedPreferences，App 被關掉再開也能接著計時
+const kTimerMode = 'timer_mode'; // 0 閒置、1 計時中、2 暫停（順序和 TimerPage 一致）
+const kTimerRunning = 1;
+const kTimerEndAt = 'timer_endAt'; // 計時中：結束時間（毫秒，epoch）
+const kTimerLeft = 'timer_left'; // 暫停時：剩下的毫秒
+const kTimerTotal = 'timer_total'; // 這一輪的總毫秒（畫圓環用）
+const kTimerPicked = 'timer_picked'; // 使用者設定的時長（毫秒）
+
+// 計時器結束的通知。id 遠大於鬧鐘的通知（鬧鐘最大 999996），不會互相覆蓋
+const timerNoticeId = 1000000001;
+
+Future<void> scheduleTimerNotice(DateTime at) async {
+  if (!at.isAfter(DateTime.now())) return;
+  await _plugin.zonedSchedule(
+    timerNoticeId,
+    '醒動鬧鐘',
+    '計時器時間到！',
+    tz.TZDateTime.from(at, tz.local),
+    NotificationDetails(
+      android: AndroidNotificationDetails(
+        _alarmChannelId,
+        '起床鬧鐘',
+        channelDescription: '到時間提醒你起床運動',
+        importance: Importance.max,
+        priority: Priority.max,
+      ),
+      iOS: DarwinNotificationDetails(interruptionLevel: InterruptionLevel.timeSensitive),
+    ),
+    androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+    uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+  );
+}
+
+Future<void> cancelTimerNotice() => _plugin.cancel(timerNoticeId);
+
+// 重排鬧鐘時會清掉所有通知（包括計時器的），所以重排後把計時器的通知補回來
+Future<void> rescheduleAll(Store store, List<Alarm> alarms, DateTime now) async {
+  await _rescheduleAlarms(store, alarms, now);
+  if (store.prefs.getInt(kTimerMode) != kTimerRunning) return;
+  final endMs = store.prefs.getInt(kTimerEndAt);
+  if (endMs == null) return;
+  await scheduleTimerNotice(DateTime.fromMillisecondsSinceEpoch(endMs));
 }
