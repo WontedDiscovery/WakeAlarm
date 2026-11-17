@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'core.dart';
+import 'liquid_glass.dart';
 import 'themes.dart';
 
 enum _Phase { idle, running, paused } // 順序要和 core.dart 的 kTimerRunning 一致
@@ -217,7 +218,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
       body: ThemedBackdrop(
         child: SafeArea(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(vertical: 24),
+            padding: EdgeInsets.fromLTRB(0, 24, 0, 24 + pageBottomInset(context)),
             child: Column(
               children: [
                 SizedBox(
