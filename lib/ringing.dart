@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:camera/camera.dart';
@@ -52,8 +53,50 @@ int? _classify(Pose p, Exercise e) {
   return null;
 }
 
+// 閃身步：身體往左或往右快速移動，超過約半個肩寬就算「閃到那一邊」；每換一邊算 1 下。
+// 量的是上半身與髖部的中心，相對於「平常站的位置」的偏移，所以站偏一點也沒關係。
+class SideStepCounter {
+  int count = 0;
+  double? _baseline; // 平常站的位置（畫面 x 座標）
+  int? _last; // 最近一次穩定停住的那一邊：-1 = 左、1 = 右
+  int? _cand; // 正在確認中的那一邊
+  int _frames = 0;
+
+  void update(Pose p) {
+    final ls = _lm(p, PoseLandmarkType.leftShoulder);
+    final rs = _lm(p, PoseLandmarkType.rightShoulder);
+    final lh = _lm(p, PoseLandmarkType.leftHip);
+    final rh = _lm(p, PoseLandmarkType.rightHip);
+    if (ls == null || rs == null || lh == null || rh == null) {
+      _cand = null;
+      _frames = 0;
+      return;
+    }
+    final sw = (ls.x - rs.x).abs(); // 肩寬，當作長度單位
+    if (sw < 1) return;
+    final cx = (ls.x + rs.x + lh.x + rh.x) / 4;
+    _baseline ??= cx;
+    final base = _baseline!;
+    final dev = (cx - base) / sw;
+    // 只在中間附近慢慢修正基準線，身體站偏或畫面位置改變時也能適應
+    if (dev.abs() < 0.25) _baseline = base * 0.97 + cx * 0.03;
+    final side = dev > 0.4 ? 1 : (dev < -0.4 ? -1 : null);
+    if (side == null) {
+      _cand = null; // 回到中間：不算換邊，只清掉還沒確認的候選
+      _frames = 0;
+      return;
+    }
+    _frames = side == _cand ? _frames + 1 : 1;
+    _cand = side;
+    if (_frames < 3) return; // 連續 3 幀都在同一邊才算數，避免抖動誤判
+    if (_last != null && side != _last) count++;
+    _last = side;
+  }
+}
+
 class RepCounter {
   int count = 0;
+  final _sideStep = SideStepCounter();
   int? _stable;
   int? _cand;
   int _frames = 0;
@@ -62,6 +105,11 @@ class RepCounter {
 
   // 連續 3 幀維持同一姿勢才算數；起始 → 目標 → 起始 計 1 下
   void update(Pose p, Exercise e) {
+    if (e == Exercise.flashStep) {
+      _sideStep.update(p);
+      count = _sideStep.count;
+      return;
+    }
     final c = _classify(p, e);
     if (c == null) {
       _cand = null;
@@ -191,7 +239,7 @@ class _RingingPageState extends State<RingingPage> with WidgetsBindingObserver {
         cam,
         ResolutionPreset.medium,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.bgra8888,
+        imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
       );
       await c.initialize();
       // 初始化期間 App 可能已切到背景，或這一頁已經結束
@@ -204,7 +252,8 @@ class _RingingPageState extends State<RingingPage> with WidgetsBindingObserver {
       _cam = c;
       await c.startImageStream(_onImage);
       if (mounted) {
-        setState(() => _hint = '請對準鏡頭，做出「${exerciseName(widget.ring.alarm.exercise)}」');
+        setState(() => _hint = '請對準鏡頭，做出「${exerciseName(widget.ring.alarm.exercise)}」'
+            '${exerciseTip(widget.ring.alarm.exercise)}');
       }
     } catch (e) {
       final failed = c;
@@ -235,7 +284,7 @@ class _RingingPageState extends State<RingingPage> with WidgetsBindingObserver {
         metadata: InputImageMetadata(
           size: Size(img.width.toDouble(), img.height.toDouble()),
           rotation: _rotation,
-          format: InputImageFormat.bgra8888,
+          format: Platform.isAndroid ? InputImageFormat.nv21 : InputImageFormat.bgra8888,
           bytesPerRow: plane.bytesPerRow,
         ),
       );
