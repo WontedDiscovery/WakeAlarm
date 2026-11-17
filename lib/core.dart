@@ -14,12 +14,19 @@ const scheduleDays = 7; // 預先排程的天數
 const maxPending = 60; // iOS 最多 64 則待發通知
 const dayNames = ['一', '二', '三', '四', '五', '六', '日'];
 
-enum Exercise { jumpingJack, raiseHands, squat }
+enum Exercise { jumpingJack, raiseHands, squat, flashStep }
 
 String exerciseName(Exercise e) => switch (e) {
       Exercise.jumpingJack => '開合跳',
       Exercise.raiseHands => '舉手',
       Exercise.squat => '深蹲',
+      Exercise.flashStep => '閃身步',
+    };
+
+// 挑戰頁的小提示；沒有提示就回傳空字串
+String exerciseTip(Exercise e) => switch (e) {
+      Exercise.flashStep => '（左右快速閃身，每換一邊算 1 下）',
+      _ => '',
     };
 
 String hhmm(int h, int m) => '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
