@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app_icon.dart';
 import 'core.dart';
 import 'ringing.dart';
+import 'root_tabs.dart';
 import 'share_card.dart';
 import 'themes.dart';
 
@@ -23,7 +24,7 @@ Future<void> main() async {
       theme: buildTheme(choice.preset, Brightness.light),
       darkTheme: buildTheme(choice.preset, Brightness.dark),
       themeMode: choice.mode,
-      home: HomePage(store: store),
+      home: RootTabs(store: store, alarmPage: HomePage(store: store)),
     ),
   ));
 }
