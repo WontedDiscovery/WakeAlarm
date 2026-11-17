@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show FontFeature;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -20,6 +21,12 @@ String fmtCountdown(Duration d) {
   String two(int v) => v.toString().padLeft(2, '0');
   return h > 0 ? '$h:${two(m)}:${two(s)}' : '${two(m)}:${two(s)}';
 }
+
+/// 按鈕文字：字太大時會自動縮小，不會換行或被切掉
+Widget _label(String text) => FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Text(text, maxLines: 1, style: const TextStyle(fontSize: 18)),
+    );
 
 class TimerPage extends StatefulWidget {
   const TimerPage({super.key, required this.store});
@@ -209,6 +216,8 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
     final caption = _phase == _Phase.running
         ? '計時中'
         : (_phase == _Phase.paused ? '已暫停' : '設定時間後按開始');
+    // 圓環大小跟著螢幕寬度變；數字放不下時會自動縮小，不會換行或跑出圓環
+    final ring = (MediaQuery.sizeOf(context).width - 96).clamp(200.0, 260.0).toDouble();
 
     return Scaffold(
       appBar: AppBar(
@@ -222,22 +231,34 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
             child: Column(
               children: [
                 SizedBox(
-                  width: 240,
-                  height: 240,
+                  width: ring,
+                  height: ring,
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
                       CustomPaint(
-                        size: const Size(240, 240),
+                        size: Size(ring, ring),
                         painter: _RingPainter(
                           progress: progress,
                           color: accent,
                           track: accent.withAlpha(50),
                         ),
                       ),
-                      Text(
-                        fmtCountdown(shown),
-                        style: const TextStyle(fontSize: 50, fontWeight: FontWeight.w300),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: ring * 0.16),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            fmtCountdown(shown),
+                            maxLines: 1,
+                            softWrap: false,
+                            style: TextStyle(
+                              fontSize: 50,
+                              fontWeight: FontWeight.w300,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -258,27 +279,31 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
                     ),
                   ),
                 const SizedBox(height: 24),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: 130,
-                      height: 60,
-                      child: OutlinedButton(
-                        onPressed: idle ? null : () => unawaited(_reset()),
-                        child: const Text('重設', style: TextStyle(fontSize: 18)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: SizedBox(
+                          height: 60,
+                          child: OutlinedButton(
+                            onPressed: idle ? null : () => unawaited(_reset()),
+                            child: _label('重設'),
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 24),
-                    SizedBox(
-                      width: 130,
-                      height: 60,
-                      child: FilledButton(
-                        onPressed: _mainAction,
-                        child: Text(_mainLabel, style: const TextStyle(fontSize: 18)),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: SizedBox(
+                          height: 60,
+                          child: FilledButton(
+                            onPressed: _mainAction,
+                            child: _label(_mainLabel),
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
             ),
