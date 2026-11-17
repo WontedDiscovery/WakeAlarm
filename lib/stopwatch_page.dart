@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'liquid_glass.dart';
 import 'themes.dart';
 
 /// 碼表格式：分:秒.百分之一秒（超過一小時會顯示時）
@@ -105,9 +106,10 @@ class _StopwatchPageState extends State<StopwatchPage> {
               const Divider(height: 1),
               Expanded(
                 child: _laps.isEmpty
-                    ? const Center(child: Text('還沒有圈數紀錄'))
+                    ? Padding(padding: EdgeInsets.only(bottom: pageBottomInset(context)), child: const Center(child: Text('還沒有圈數紀錄')))
                     : ListView.builder(
                         itemCount: _laps.length,
+                        padding: EdgeInsets.only(bottom: pageBottomInset(context)),
                         itemBuilder: (context, i) => ListTile(
                           title: Text('第 ${_laps.length - i} 圈'),
                           subtitle: Text('單圈 ${fmtStopwatch(splits[i])}'),
