@@ -391,6 +391,7 @@ class _EditPageState extends State<EditPage> {
       widget.editing == null ? {1, 2, 3, 4, 5, 6, 7} : {...widget.editing!.days};
   late Exercise _exercise = widget.editing?.exercise ?? Exercise.jumpingJack;
   late int _target = widget.editing?.target ?? 20;
+  late Ringtone _ringtone = widget.editing?.ringtone ?? Ringtone.system;
   Future<void> _pickTime() async {
     final t = await showTimePicker(
       context: context,
@@ -420,6 +421,7 @@ class _EditPageState extends State<EditPage> {
       target: _target,
       enabled: old?.enabled ?? true,
       createdAt: _scheduleChanged(old) ? DateTime.now() : old!.createdAt,
+      ringtone: _ringtone,
     );
     await _write([...all.where((a) => a.id != alarm.id), alarm]);
   }
@@ -517,6 +519,17 @@ class _EditPageState extends State<EditPage> {
                   onPressed: _target < 50 ? () => setState(() => _target += 5) : null,
                 ),
               ],
+            ),
+          ),
+          ListTile(
+            title: const Text('鈴聲'),
+            trailing: DropdownButton<Ringtone>(
+              value: _ringtone,
+              items: [
+                for (final r in Ringtone.values)
+                  DropdownMenuItem(value: r, child: Text(ringtoneName(r))),
+              ],
+              onChanged: (v) => setState(() => _ringtone = v ?? _ringtone),
             ),
           ),
         ],
