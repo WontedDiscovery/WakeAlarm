@@ -29,6 +29,20 @@ String exerciseTip(Exercise e) => switch (e) {
       _ => '',
     };
 
+// 鈴聲：system = 系統預設；scream = 自訂音檔 shinji_scream.caf（已重複成約 27 秒，放在 ios_native/）
+enum Ringtone { system, scream }
+
+String ringtoneName(Ringtone r) => switch (r) {
+      Ringtone.system => '系統預設',
+      Ringtone.scream => '尖叫（自訂）',
+    };
+
+// 通知用的音檔名（音檔要放在 App 主 bundle 裡）；系統預設回傳 null
+String? ringtoneFile(Ringtone r) => switch (r) {
+      Ringtone.system => null,
+      Ringtone.scream => 'shinji_scream.caf',
+    };
+
 String hhmm(int h, int m) => '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
 
 String dayKey(DateTime d) =>
@@ -47,6 +61,7 @@ class Alarm {
     required this.target,
     required this.enabled,
     required this.createdAt,
+    this.ringtone = Ringtone.system,
   });
 
   final int id;
@@ -57,6 +72,7 @@ class Alarm {
   final int target;
   bool enabled;
   final DateTime createdAt;
+  final Ringtone ringtone; // 響鈴時的聲音；舊資料沒有這個欄位時為系統預設
 
   int get minutesOfDay => hour * 60 + minute;
 
@@ -71,6 +87,7 @@ class Alarm {
         'target': target,
         'enabled': enabled,
         'createdAt': createdAt.toIso8601String(),
+        'ringtone': ringtone.name,
       };
 
   factory Alarm.fromJson(Map<String, dynamic> j) => Alarm(
@@ -82,6 +99,7 @@ class Alarm {
         target: j['target'] as int,
         enabled: j['enabled'] as bool,
         createdAt: DateTime.parse(j['createdAt'] as String),
+        ringtone: Ringtone.values.byName((j['ringtone'] as String?) ?? 'system'),
       );
 }
 
@@ -300,7 +318,13 @@ Future<List<Alarm>> _syncAlarmKit(Store store, List<Alarm> alarms) async {
     await AlarmKit.cancel(int.parse(id)); // 內容改變、已關閉或已刪除：先取消舊的
     if (sig == null) continue;
     final a = byId[id]!;
-    if (await AlarmKit.schedule(id: a.id, hour: a.hour, minute: a.minute, weekdays: a.days)) {
+    if (await AlarmKit.schedule(
+      id: a.id,
+      hour: a.hour,
+      minute: a.minute,
+      weekdays: a.days,
+      sound: a.ringtone.name,
+    )) {
       done[id] = sig;
     } else {
       failed.add(a);
@@ -311,7 +335,11 @@ Future<List<Alarm>> _syncAlarmKit(Store store, List<Alarm> alarms) async {
   return failed;
 }
 
-String _akSignature(Alarm a) => '${a.hour}:${a.minute}|${([...a.days]..sort()).join(',')}';
+String _akSignature(Alarm a) {
+  final base = '${a.hour}:${a.minute}|${([...a.days]..sort()).join(',')}';
+  // 系統預設維持舊格式，免得升級後所有鬧鐘都被重排一次
+  return a.ringtone == Ringtone.system ? base : '$base|${a.ringtone.name}';
+}
 
 // 挑戰結束（成功或時限到）：關掉系統鬧鐘的響鈴
 Future<void> silenceAlarm(Alarm a) async {
@@ -335,18 +363,18 @@ Future<void> _scheduleNotifications(List<Alarm> alarms, DateTime now) async {
     priority: Priority.max,
     category: AndroidNotificationCategory.alarm,
   );
-  final jobs = <(DateTime, int, String)>[];
+  final jobs = <(DateTime, int, String, Ringtone)>[];
   for (final a in alarms.where((a) => a.enabled)) {
     for (var k = 0; k < scheduleDays; k++) {
       final day = DateTime(now.year, now.month, now.day + k);
       final ring = a.ringAt(day);
       if (!a.days.contains(day.weekday) || !ring.isAfter(now)) continue;
       final body = '完成「${exerciseName(a.exercise)}」${a.target} 下，$windowMinutes 分鐘內起床！';
-      jobs.add((ring, a.id * 10 + k, body));
+      jobs.add((ring, a.id * 10 + k, body, a.ringtone));
     }
   }
   jobs.sort((x, y) => x.$1.compareTo(y.$1));
-  for (final (ring, id, body) in jobs.take(maxPending)) {
+  for (final (ring, id, body, tone) in jobs.take(maxPending)) {
     await _plugin.zonedSchedule(
       id,
       '醒動鬧鐘',
@@ -355,7 +383,10 @@ Future<void> _scheduleNotifications(List<Alarm> alarms, DateTime now) async {
       NotificationDetails(
         android: androidDetails,
         // 時間敏感：可在部分專注模式下顯示（需要 App 有時間敏感通知權限）
-        iOS: DarwinNotificationDetails(interruptionLevel: InterruptionLevel.timeSensitive),
+        iOS: DarwinNotificationDetails(
+          interruptionLevel: InterruptionLevel.timeSensitive,
+          sound: ringtoneFile(tone), // null = 系統預設聲音
+        ),
       ),
       androidScheduleMode: exact ? AndroidScheduleMode.exactAllowWhileIdle : AndroidScheduleMode.inexactAllowWhileIdle,
       uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
