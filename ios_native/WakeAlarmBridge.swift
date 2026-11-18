@@ -124,10 +124,12 @@ private enum AlarmKitHandler {
                 result(FlutterError(code: "bad_args", message: "schedule 參數不完整", details: nil))
                 return
             }
+            // 鈴聲："system"（系統預設）或 "scream"（自訂音檔）；沒帶就用系統預設
+            let sound = (args["sound"] as? String) ?? "system"
             Task {
                 do {
                     try await AlarmKitHandler.scheduleAlarm(
-                        uuid: uuid, hour: hour, minute: minute, weekdays: weekdays
+                        uuid: uuid, hour: hour, minute: minute, weekdays: weekdays, sound: sound
                     )
                     AlarmKitHandler.reply(result, true)
                 } catch {
@@ -167,7 +169,7 @@ private enum AlarmKitHandler {
     }
 
     /// 排一個每週重複的鬧鐘（同一個 uuid 要先取消，由 Dart 端負責）
-    private static func scheduleAlarm(uuid: String, hour: Int, minute: Int, weekdays: [Int]) async throws {
+    private static func scheduleAlarm(uuid: String, hour: Int, minute: Int, weekdays: [Int], sound: String) async throws {
         guard let id = UUID(uuidString: uuid) else { return }
         let days: [Locale.Weekday] = weekdays.compactMap { AlarmKitHandler.weekday(from: $0) }
 
@@ -190,7 +192,8 @@ private enum AlarmKitHandler {
             attributes: attributes,
             stopIntent: nil,
             secondaryIntent: OpenWakeAlarmIntent(),
-            sound: .default
+            // 自訂音效只會播一次（不循環），所以音檔本身已經重複過；名稱要帶副檔名，檔案放在 App 主 bundle
+            sound: sound == "scream" ? .named("shinji_scream.caf") : .default
         )
         _ = try await AlarmManager.shared.schedule(id: id, configuration: configuration)
     }
