@@ -22,7 +22,7 @@ jobs:
 
       - name: 檢查專案結構
         run: |
-          for f in pubspec.yaml lib/main.dart lib/app_icon.dart ios_native/WakeAlarmBridge.swift assets/icons/orange.png assets/icons/dark.png; do
+          for f in pubspec.yaml lib/main.dart lib/app_icon.dart ios_native/WakeAlarmBridge.swift ios_native/shinji_scream.caf assets/icons/orange.png assets/icons/dark.png; do
             if [ ! -f "$f" ]; then
               echo "::error::缺少 $f。請確認檔案在 repo 根目錄，不要多包一層資料夾"
               exit 1
@@ -119,6 +119,7 @@ jobs:
       - name: 加入系統鬧鐘（AlarmKit）原生程式
         run: |
           cp ios_native/WakeAlarmBridge.swift ios/Runner/WakeAlarmBridge.swift
+          cp ios_native/shinji_scream.caf ios/Runner/shinji_scream.caf
           ruby -e "require 'xcodeproj'" 2>/dev/null || sudo gem install xcodeproj --no-document
           ruby - <<'RUBY'
           require 'xcodeproj'
@@ -127,6 +128,9 @@ jobs:
           group = project.main_group.find_subpath('Runner', true)
           ref = group.files.find { |f| f.path == 'WakeAlarmBridge.swift' } || group.new_reference('WakeAlarmBridge.swift')
           target.add_file_references([ref]) unless target.source_build_phase.files_references.include?(ref)
+          # 自訂鈴聲音檔：加進 Copy Bundle Resources，打包後才會在 App 主 bundle 裡（AlarmKit 找得到）
+          sound = group.files.find { |f| f.path == 'shinji_scream.caf' } || group.new_reference('shinji_scream.caf')
+          target.resources_build_phase.add_file_reference(sound, true)
           project.save
           RUBY
           python3 - <<'PY'
