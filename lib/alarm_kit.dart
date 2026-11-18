@@ -31,18 +31,21 @@ class AlarmKit {
       (await _call<bool>('requestAuthorization')) ?? false;
 
   /// 排一個每週重複的系統鬧鐘。weekdays 採用 DateTime.weekday：1 = 週一 … 7 = 週日。
+  /// sound：'system' = 系統預設；'scream' = 內建的自訂鈴聲（Swift 端對應到 shinji_scream.caf）。
   /// 同一個 id 要重排前，請先呼叫 cancel。
   static Future<bool> schedule({
     required int id,
     required int hour,
     required int minute,
     required Set<int> weekdays,
+    String sound = 'system',
   }) async {
     final ok = await _call<bool>('schedule', {
       'uuid': alarmUuid(id),
       'hour': hour,
       'minute': minute,
       'weekdays': weekdays.toList()..sort(),
+      'sound': sound,
     });
     return ok ?? false;
   }
