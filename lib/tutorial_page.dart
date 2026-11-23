@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core.dart';
+import 'illustrated_guide_page.dart';
 import 'liquid_glass.dart';
 import 'practice_page.dart';
 import 'themes.dart';
@@ -30,6 +31,21 @@ class TutorialPage extends StatelessWidget {
               children: [
                 _Bullet('醒動鬧鐘是「運動起床」鬧鐘：時間到會響鈴，你要對著鏡頭做完指定次數的運動，才算成功起床。'),
                 _Bullet('響鈴後有 $windowMinutes 分鐘的挑戰時限，時間到還沒做完就記為失敗。'),
+              ],
+            ),
+            _Card(
+              icon: Icons.photo_library_outlined,
+              title: '畫面圖解',
+              children: [
+                _Bullet('用示意畫面對照每個按鈕和文字，知道東西在哪裡、按了會發生什麼。'),
+                const SizedBox(height: 4),
+                FilledButton.icon(
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const IllustratedGuidePage(),
+                  )),
+                  icon: const Icon(Icons.image_outlined),
+                  label: const Text('看畫面圖解'),
+                ),
               ],
             ),
             _Card(
