@@ -139,6 +139,7 @@ class TutorialPage extends StatelessWidget {
               children: [
                 _Bullet('iOS 26 以上會使用系統鬧鐘（AlarmKit），準時響鈴，不受靜音與專注模式影響，也會顯示在鎖定畫面。'),
                 _Bullet('較舊的 iOS，或系統鬧鐘排不進去時，會改用通知提醒。首頁出現「系統鬧鐘未排入」的紅字，表示該鬧鐘改用通知。'),
+                _Bullet('用通知提醒時，每隔約 $repeatGapSeconds 秒會再響一次，直到你完成挑戰或時限到為止。'),
                 _Bullet('請到 iPhone 的「設定」確認本 App 的通知、鬧鐘與相機權限都已開啟。'),
                 _Bullet('相機只用來偵測動作，影像只在手機上處理；選背景圖時才會用到相簿，圖片只存在手機上。'),
               ],
