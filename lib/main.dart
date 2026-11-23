@@ -10,6 +10,7 @@ import 'ringing.dart';
 import 'root_tabs.dart';
 import 'share_card.dart';
 import 'themes.dart';
+import 'tutorial_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -146,6 +147,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     ));
   }
 
+  Future<void> _openTutorial() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => const TutorialPage(),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -172,6 +179,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             tooltip: '主題與深色模式',
             icon: const Icon(Icons.palette),
             onPressed: _openThemes,
+          ),
+          IconButton(
+            tooltip: '使用教學',
+            icon: const Icon(Icons.help_outline),
+            onPressed: _openTutorial,
           ),
         ],
       ),
