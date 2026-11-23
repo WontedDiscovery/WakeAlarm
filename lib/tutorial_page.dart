@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'core.dart';
 import 'liquid_glass.dart';
+import 'practice_page.dart';
 import 'themes.dart';
 
 /// 使用教學頁：說明醒動鬧鐘的操作方式與注意事項（純文字，不讀取任何資料）
@@ -29,6 +30,23 @@ class TutorialPage extends StatelessWidget {
               children: [
                 _Bullet('醒動鬧鐘是「運動起床」鬧鐘：時間到會響鈴，你要對著鏡頭做完指定次數的運動，才算成功起床。'),
                 _Bullet('響鈴後有 $windowMinutes 分鐘的挑戰時限，時間到還沒做完就記為失敗。'),
+              ],
+            ),
+            _Card(
+              icon: Icons.school,
+              title: '第一次使用，照這 3 步做',
+              children: [
+                _Bullet('出現權限提示時請按「允許」：通知會在啟動時詢問，相機在試做時出現，鬧鐘在第一次儲存鬧鐘時出現。'),
+                _Bullet('點下面的「試做挑戰」，對著鏡頭做一次動作，確認計數有在跳。'),
+                _Bullet('回首頁，點右下角的「＋」新增第一個鬧鐘。'),
+                const SizedBox(height: 4),
+                FilledButton.icon(
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const PracticePage(),
+                  )),
+                  icon: const Icon(Icons.videocam),
+                  label: const Text('試做挑戰'),
+                ),
               ],
             ),
             _Card(
