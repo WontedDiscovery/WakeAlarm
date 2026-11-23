@@ -12,6 +12,8 @@ import 'alarm_kit.dart';
 const windowMinutes = 3; // 響鈴後的挑戰時限
 const scheduleDays = 7; // 預先排程的天數
 const maxPending = 60; // iOS 最多 64 則待發通知
+const repeatGapSeconds = 28; // 重複通知的間隔：自訂鈴聲約 27 秒，留一點空檔（通知音效上限 30 秒）
+const maxRepeats = (windowMinutes * 60 - 1) ~/ repeatGapSeconds; // 時限內還會再響幾次（3 分鐘內是 6 次）
 const dayNames = ['一', '二', '三', '四', '五', '六', '日'];
 
 enum Exercise { jumpingJack, raiseHands, squat, flashStep }
@@ -171,6 +173,7 @@ Future<void> resolve(Store s, Alarm a, DateTime day, bool ok) async {
   if (r.containsKey(k)) return;
   r[k] = ok ? 'ok' : 'fail';
   await s.saveResults(r);
+  await cancelRingRepeats(a, day); // 這次響鈴已有結果，還沒發出的重複通知一併取消
   if (isFirstOfDay(a, day, s.alarms)) {
     await s.saveStreak(ok ? s.streak + 1 : 0);
   }
@@ -289,7 +292,7 @@ Future<void> _rescheduleAlarms(Store store, List<Alarm> alarms, DateTime now) as
   if (useAlarmKit) {
     await _plugin.cancelAll();
     final failed = await _syncAlarmKit(store, alarms);
-    await _scheduleNotifications(failed, now);
+    await _scheduleNotifications(store, failed, now);
     return;
   }
   // 改用通知前，先取消之前寫進系統鬧鐘的，避免同一個鬧鐘響兩次
@@ -298,7 +301,7 @@ Future<void> _rescheduleAlarms(Store store, List<Alarm> alarms, DateTime now) as
   }
   await store.saveAkSynced({});
   await store.saveAkFailed([]);
-  await _scheduleNotifications(alarms, now);
+  await _scheduleNotifications(store, alarms, now);
 }
 
 // 只重排「內容有變」的鬧鐘；沒變的完全不碰，免得打斷正在響的鬧鐘
@@ -346,8 +349,11 @@ Future<void> silenceAlarm(Alarm a) async {
   if (await AlarmKit.isSupported()) await AlarmKit.stop(a.id);
 }
 
-// 通知備援：只排未來 7 天，最多 60 則
-Future<void> _scheduleNotifications(List<Alarm> alarms, DateTime now) async {
+// 通知備援：iOS 26 以下，或系統鬧鐘排不進去時使用。
+// 每次響鈴先排一則主通知；額度還夠，就再補上之後每隔 repeatGapSeconds 秒的重複通知，
+// 直到挑戰時限結束。整體最多 maxPending 則：主通知優先，重複通知依時間順序補。
+// 這次響鈴已經有結果（成功或失敗）的，不再排。
+Future<void> _scheduleNotifications(Store store, List<Alarm> alarms, DateTime now) async {
   await _plugin.cancelAll();
   // Android：沒有精準鬧鐘權限時（Android 12 以下或被關掉），改用不精準排程，免得整批排程失敗
   final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
@@ -363,23 +369,47 @@ Future<void> _scheduleNotifications(List<Alarm> alarms, DateTime now) async {
     priority: Priority.max,
     category: AndroidNotificationCategory.alarm,
   );
-  final jobs = <(DateTime, int, String, Ringtone)>[];
+  final done = store.results;
+  // 還沒過時限的響鈴（含昨天跨午夜的），依時間排序
+  final rings = <(DateTime, Alarm, DateTime)>[];
   for (final a in alarms.where((a) => a.enabled)) {
-    for (var k = 0; k < scheduleDays; k++) {
+    for (var k = -1; k < scheduleDays; k++) {
       final day = DateTime(now.year, now.month, now.day + k);
+      if (!a.days.contains(day.weekday)) continue;
       final ring = a.ringAt(day);
-      if (!a.days.contains(day.weekday) || !ring.isAfter(now)) continue;
-      final body = '完成「${exerciseName(a.exercise)}」${a.target} 下，$windowMinutes 分鐘內起床！';
-      jobs.add((ring, a.id * 10 + k, body, a.ringtone));
+      if (ring.isBefore(a.createdAt) || done.containsKey(keyOf(a, day))) continue;
+      if (!ring.add(const Duration(minutes: windowMinutes)).isAfter(now)) continue;
+      rings.add((ring, a, day));
     }
   }
+  rings.sort((x, y) => x.$1.compareTo(y.$1));
+
+  final jobs = <(DateTime, int, String, Ringtone)>[];
+  // 1) 主通知：還沒響的，最多 maxPending 則
+  for (final (ring, a, day) in rings) {
+    if (!ring.isAfter(now) || jobs.length >= maxPending) continue;
+    jobs.add((ring, _ringNoticeId(a, day, 0), _firstBody(a), a.ringtone));
+  }
+  // 2) 重複通知：剩下的額度依時間順序補；同一次響鈴要補完才補，不會只補一半
+  var left = maxPending - jobs.length;
+  for (final (ring, a, day) in rings) {
+    final again = <(DateTime, int, String, Ringtone)>[];
+    for (var r = 1; r <= maxRepeats; r++) {
+      final at = ring.add(Duration(seconds: r * repeatGapSeconds));
+      if (at.isAfter(now)) again.add((at, _ringNoticeId(a, day, r), _againBody(a), a.ringtone));
+    }
+    if (again.isEmpty || again.length > left) continue;
+    jobs.addAll(again);
+    left -= again.length;
+  }
+
   jobs.sort((x, y) => x.$1.compareTo(y.$1));
-  for (final (ring, id, body, tone) in jobs.take(maxPending)) {
+  for (final (time, id, body, tone) in jobs) {
     await _plugin.zonedSchedule(
       id,
       '醒動鬧鐘',
       body,
-      tz.TZDateTime.from(ring, tz.local),
+      tz.TZDateTime.from(time, tz.local),
       NotificationDetails(
         android: androidDetails,
         // 時間敏感：可在部分專注模式下顯示（需要 App 有時間敏感通知權限）
@@ -391,6 +421,24 @@ Future<void> _scheduleNotifications(List<Alarm> alarms, DateTime now) async {
       androidScheduleMode: exact ? AndroidScheduleMode.exactAllowWhileIdle : AndroidScheduleMode.inexactAllowWhileIdle,
       uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
     );
+  }
+}
+
+String _firstBody(Alarm a) => '完成「${exerciseName(a.exercise)}」${a.target} 下，$windowMinutes 分鐘內起床！';
+
+String _againBody(Alarm a) => '還沒完成「${exerciseName(a.exercise)}」${a.target} 下，快起床！';
+
+// 響鈴通知的 id。r = 0 是主通知，1 以上是重複通知。
+// 用 UTC 日數除以 8 取餘數，所以 8 天之內的響鈴不會撞到同一個 id；範圍也避開計時器的通知 id。
+int _ringNoticeId(Alarm a, DateTime day, int r) {
+  final dayIndex = DateTime.utc(day.year, day.month, day.day).millisecondsSinceEpoch ~/ 86400000;
+  return (a.id * 8 + dayIndex % 8) * 100 + r;
+}
+
+// 這次響鈴已經有結果（成功、失敗或時限到）：把還沒發出的通知取消掉
+Future<void> cancelRingRepeats(Alarm a, DateTime day) async {
+  for (var r = 0; r <= maxRepeats; r++) {
+    await _plugin.cancel(_ringNoticeId(a, day, r));
   }
 }
 
